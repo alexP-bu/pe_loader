@@ -5,13 +5,14 @@
 BYTE* getFileBytes(char* path){
   HANDLE hFile = NULL;
   DWORD fileSize = 0;
-  hFile = CreateFileA(path,
-                      GENERIC_READ,
-                      0,
-                      NULL,
-                      OPEN_EXISTING,
-                      FILE_ATTRIBUTE_NORMAL,
-                      NULL);
+  hFile = CreateFileA(
+    path,
+    GENERIC_READ,
+    0,
+    NULL,
+    OPEN_EXISTING,
+    FILE_ATTRIBUTE_NORMAL,
+    NULL);
   if (hFile == INVALID_HANDLE_VALUE){
     printf("[!] ERROR: failed to read file....\n");
     return NULL;
@@ -33,7 +34,6 @@ BYTE* getFileBytes(char* path){
   }
   buffer[fileSize] = '\0';
   printf("[+] Finished reading file bytes successfully...\n");
-  //cleanup
   CloseHandle(hFile);
   return buffer;
 }
@@ -62,16 +62,19 @@ int main(int argc, char *argv[]){
   DWORD imageSize = optionalHeader.SizeOfImage;
   DWORD numSections = fileHeader.NumberOfSections;
   //allocate memory for image
-  BYTE* baseAddress = VirtualAlloc(NULL,
-                                   imageSize,
-                                   MEM_RESERVE | MEM_COMMIT,
-                                   PAGE_EXECUTE_READWRITE); 
+  BYTE* baseAddress = (BYTE*) VirtualAlloc(
+    NULL,
+    imageSize,
+    MEM_RESERVE | MEM_COMMIT,
+    PAGE_EXECUTE_READWRITE
+  ); 
   //copy headers into the memory
   memcpy(baseAddress, fileBytes, headerSize);
   //copy sections into the memory
   for(DWORD i = 0; i < numSections; i++){
-    void* destination = sections[i].VirtualAddress + baseAddress;
-    void* source = sections[i].PointerToRawData + baseAddress;
+    void* destination = (void*) (sections[i].VirtualAddress + baseAddress);
+    void* source = (void*) (sections[i].PointerToRawData + fileBytes);
+    printf("[-] Copying section %s with size %d\n", sections[i].Name, sections[i].SizeOfRawData);
     if(sections[i].SizeOfRawData == 0){
       memset(destination, 0, sections[i].Misc.VirtualSize);
     }else{
@@ -80,6 +83,44 @@ int main(int argc, char *argv[]){
   }
   printf("[+] Finished memory mapping PE headers and sections successfully...\n");
   //load dependencies: pe -> for dll in dlls -> for function in dlls -> get virtual address and patch
+  PIMAGE_IMPORT_DESCRIPTOR imageDescriptor = (PIMAGE_IMPORT_DESCRIPTOR)((UINT_PTR)baseAddress + optionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress);
+  HMODULE hLibrary = NULL;
+  PIMAGE_THUNK_DATA lookupTable = NULL;
+  PIMAGE_THUNK_DATA addrTable = NULL;
+  int i = 0;
+  while(imageDescriptor[i].FirstThunk != 0){
+    //load dll
+    char* dllName = (char*) (imageDescriptor[i].Name + baseAddress);
+    if((hLibrary = LoadLibraryA(dllName)) == NULL){
+      printf("[!] ERROR loading DLL: %s\n", dllName);
+    }else{
+      printf("[-] Loaded DLL: %s\n", dllName);
+    }
+    //load functions in dlls
+    lookupTable = (PIMAGE_THUNK_DATA) (baseAddress + imageDescriptor[i].OriginalFirstThunk);
+    addrTable = (PIMAGE_THUNK_DATA) (baseAddress + imageDescriptor[i].FirstThunk);
+    int j = 0;
+    while(lookupTable[j].u1.AddressOfData != 0){
+      FARPROC function = NULL;
+      UINT_PTR addr = lookupTable[j].u1.AddressOfData;
+      if((addr & IMAGE_ORDINAL_FLAG) == 0){
+        PIMAGE_IMPORT_BY_NAME imageImport = (PIMAGE_IMPORT_BY_NAME) (addr + baseAddress);
+        char* functionName = (char*) imageImport->Name;
+        function = GetProcAddress(hLibrary, functionName);
+        printf("[-] Loaded function: %s\n", functionName);
+      }else{
+        function = GetProcAddress(hLibrary, (LPSTR) lookupTable);
+      }
+      if(function == NULL){
+        printf("[!] FAILED TO LOAD FUNCTION: %d\n", GetLastError());
+        return 1;
+      }
+      addrTable[j].u1.Function = (UINT_PTR) function;
+      j++;
+    }
+    i++;
+  }
+  printf("[+] Finished loading dependencies sucessfully!");
   //base relocations
   //handle TLS callbacks
   //run entry point
