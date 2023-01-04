@@ -2,6 +2,8 @@
 #include <windows.h>
 #include <stdio.h>
 
+typedef void EntryPoint(void);
+
 BYTE* getFileBytes(char* path){
   HANDLE hFile = NULL;
   DWORD fileSize = 0;
@@ -57,7 +59,7 @@ int main(int argc, char *argv[]){
   IMAGE_OPTIONAL_HEADER optionalHeader = ntHeader->OptionalHeader;
   //get information needed for loading
   DWORD entryPoint = optionalHeader.AddressOfEntryPoint;
-  DWORD imageBase = optionalHeader.ImageBase;
+  DWORD prefImageBase = optionalHeader.ImageBase;
   DWORD headerSize = optionalHeader.SizeOfHeaders;
   DWORD imageSize = optionalHeader.SizeOfImage;
   DWORD numSections = fileHeader.NumberOfSections;
@@ -72,7 +74,7 @@ int main(int argc, char *argv[]){
   memcpy(baseAddress, fileBytes, headerSize);
   //copy sections into the memory
   for(DWORD i = 0; i < numSections; i++){
-    void* destination = (void*) (sections[i].VirtualAddress + baseAddress);
+    void* destination = (void*) (sections[i].VirtualAddress + (UINT_PTR)baseAddress);
     void* source = (void*) (sections[i].PointerToRawData + fileBytes);
     printf("[-] Copying section %s with size %d\n", sections[i].Name, sections[i].SizeOfRawData);
     if(sections[i].SizeOfRawData == 0){
@@ -121,8 +123,29 @@ int main(int argc, char *argv[]){
     i++;
   }
   printf("[+] Finished loading dependencies sucessfully!");
-  //base relocations
-  //handle TLS callbacks
+  //base relocations (TODO)
+  if(baseAddress - prefImageBase != 0){
+    PIMAGE_BASE_RELOCATION relocation = (PIMAGE_BASE_RELOCATION)(baseAddress + optionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].VirtualAddress);
+    while(relocation->VirtualAddress > 0){
+      DWORD nRelocs = relocation->SizeOfBlock - (sizeof(DWORD) * 2) / sizeof(WORD);
+      UINT_PTR page = (UINT_PTR) (baseAddress + relocation->VirtualAddress);
+      for(DWORD i = 0; i < nRelocs; i++){
+      }
+    }
+  }
+  //TLS (thread local storage) callbacks
+  if(optionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_TLS].Size != 0){
+    PIMAGE_TLS_DIRECTORY tls = (PIMAGE_TLS_DIRECTORY)(baseAddress + optionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_TLS].VirtualAddress);
+    PIMAGE_TLS_CALLBACK tlsCallback = (PIMAGE_TLS_CALLBACK) tls->AddressOfCallBacks;
+    while(tlsCallback){
+      printf("[-] TLS callback found: %s", tlsCallback);
+      (tlsCallback)((LPVOID)baseAddress, DLL_PROCESS_ATTACH, NULL);
+      tlsCallback++;
+    }
+  }
+  printf("[+] Finished handling TLS callbacks...");
   //run entry point
+  UINT_PTR entry = (UINT_PTR) (baseAddress + entryPoint);
+  ((EntryPoint*)entry)();
   return 0;
 }
