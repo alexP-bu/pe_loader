@@ -128,11 +128,30 @@ int main(int argc, char *argv[]){
     PIMAGE_BASE_RELOCATION relocation = (PIMAGE_BASE_RELOCATION)(baseAddress + optionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].VirtualAddress);
     while(relocation->VirtualAddress > 0){
       DWORD nRelocs = relocation->SizeOfBlock - (sizeof(DWORD) * 2) / sizeof(WORD);
-      UINT_PTR page = (UINT_PTR) (baseAddress + relocation->VirtualAddress);
+      PWORD pages = (PWORD) (baseAddress + relocation->VirtualAddress);
       for(DWORD i = 0; i < nRelocs; i++){
+        WORD relocType = pages[i] >> 12;
+        WORD relocOffset = pages[i] & 0xFFF;
+        PDWORD relocAddress = (PDWORD)(baseAddress + relocOffset + relocation->VirtualAddress);
+        PULONGLONG relocVA = NULL;
+        switch(relocType){
+          case IMAGE_REL_BASED_ABSOLUTE:
+            break;
+          case IMAGE_REL_BASED_HIGHLOW:
+            relocAddress += (DWORD) baseAddress;
+            break;
+          case IMAGE_REL_BASED_DIR64: //TODO FIX
+            relocVA = (PULONGLONG) (pages + relocOffset);
+            *relocVA = *relocVA + (baseAddress - prefImageBase); 
+          default:
+            printf("Unsupported relocation type: %d", relocType);
+        }
+        //get next reloc block
+        relocation = (PIMAGE_BASE_RELOCATION) (relocation + relocation->SizeOfBlock);
       }
     }
   }
+  printf("[+] Finished base relocations");
   //TLS (thread local storage) callbacks
   if(optionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_TLS].Size != 0){
     PIMAGE_TLS_DIRECTORY tls = (PIMAGE_TLS_DIRECTORY)(baseAddress + optionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_TLS].VirtualAddress);
