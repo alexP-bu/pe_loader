@@ -122,7 +122,7 @@ int main(int argc, char *argv[]){
     }
     i++;
   }
-  printf("[+] Finished loading dependencies sucessfully!");
+  printf("[+] Finished loading dependencies sucessfully!\n");
   //base relocations (TODO)
   if(baseAddress - prefImageBase != 0){
     PIMAGE_BASE_RELOCATION relocation = (PIMAGE_BASE_RELOCATION)(baseAddress + optionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].VirtualAddress);
@@ -133,6 +133,7 @@ int main(int argc, char *argv[]){
         WORD relocType = pages[i] >> 12;
         WORD relocOffset = pages[i] & 0xFFF;
         PDWORD relocAddress = (PDWORD)(baseAddress + relocOffset + relocation->VirtualAddress);
+        printf("[-] Performing relocation with type: %d\n", relocType);
         PULONGLONG relocVA = NULL;
         switch(relocType){
           case IMAGE_REL_BASED_ABSOLUTE:
@@ -140,25 +141,28 @@ int main(int argc, char *argv[]){
           case IMAGE_REL_BASED_HIGHLOW:
             relocAddress += (DWORD) baseAddress;
             break;
-          case IMAGE_REL_BASED_DIR64: //TODO FIX
+          case IMAGE_REL_BASED_DIR64: //TODO FIX?
             relocVA = (PULONGLONG) (pages + relocOffset);
-            *relocVA = *relocVA + (baseAddress - prefImageBase); 
+            relocVA = *relocVA + (baseAddress - prefImageBase);
+            break; 
+          case IMAGE_REL_BASED_HIGHADJ:
+            break; 
           default:
-            printf("Unsupported relocation type: %d", relocType);
+            printf("Unsupported relocation type: %d\n", relocType);
         }
         //get next reloc block
         relocation = (PIMAGE_BASE_RELOCATION) (relocation + relocation->SizeOfBlock);
       }
     }
   }
-  printf("[+] Finished base relocations");
+  printf("[+] Finished base relocations\n");
   //TLS (thread local storage) callbacks
   if(optionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_TLS].Size != 0){
     PIMAGE_TLS_DIRECTORY tls = (PIMAGE_TLS_DIRECTORY)(baseAddress + optionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_TLS].VirtualAddress);
-    PIMAGE_TLS_CALLBACK tlsCallback = (PIMAGE_TLS_CALLBACK) tls->AddressOfCallBacks;
+    PIMAGE_TLS_CALLBACK *tlsCallback = (PIMAGE_TLS_CALLBACK *) tls->AddressOfCallBacks;
     while(tlsCallback){
       printf("[-] TLS callback found: %s", tlsCallback);
-      (tlsCallback)((LPVOID)baseAddress, DLL_PROCESS_ATTACH, NULL);
+      (*tlsCallback)((LPVOID)baseAddress, DLL_PROCESS_ATTACH, NULL);
       tlsCallback++;
     }
   }
