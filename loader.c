@@ -2,8 +2,10 @@
 #include <windows.h>
 #include <stdio.h>
 
+//function to execute entrypoint
 typedef void EntryPoint(void);
 
+//function to read file bytes
 BYTE* getFileBytes(char* path){
   HANDLE hFile = NULL;
   DWORD fileSize = 0;
