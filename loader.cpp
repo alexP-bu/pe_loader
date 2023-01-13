@@ -129,7 +129,6 @@ int main(int argc, char *argv[]){
     }
     i++;
   }
-  PIMAGE_DYNAMIC_RELOCATION test;
   printf("[+] Finished loading dependencies sucessfully!\n");
   //base relocations 
   if (baseAddress - prefImageBase != 0){
