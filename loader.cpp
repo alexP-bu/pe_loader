@@ -129,10 +129,11 @@ int main(int argc, char *argv[]){
     }
     i++;
   }
+  PIMAGE_DYNAMIC_RELOCATION test;
   printf("[+] Finished loading dependencies sucessfully!\n");
   //base relocations 
   if (baseAddress - prefImageBase != 0){
-    struct RelocationBlock* relocation = (RelocationBlock*)(baseAddress + optionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].VirtualAddress);
+    PIMAGE_RELOCATION_BLOCK relocation = (PIMAGE_RELOCATION_BLOCK)(baseAddress + optionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].VirtualAddress);
     while(relocation->dwPageRVA > 0){
         //n_relocation = dwBlockSize - 8) //2
         DWORD dwNRelocs = (relocation->dwBlockSize - (sizeof(DWORD) * 2) )/ (sizeof(WORD));
