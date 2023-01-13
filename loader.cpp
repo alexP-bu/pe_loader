@@ -7,9 +7,9 @@
 typedef void EntryPoint(void);
 
 typedef struct RelocationBlock {
-    DWORD dwPageRVA;
-    DWORD dwBlockSize;
-    WORD wRelocation[];
+    DWORD VirtualAddress;
+    DWORD SizeOfBlock;
+    WORD relocation[];
 } RelocationBlock, *PIMAGE_RELOCATION_BLOCK;
 
 //function to read file bytes
@@ -134,31 +134,31 @@ int main(int argc, char *argv[]){
   //base relocations 
   if (baseAddress - prefImageBase != 0){
     PIMAGE_RELOCATION_BLOCK relocation = (PIMAGE_RELOCATION_BLOCK)(baseAddress + optionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].VirtualAddress);
-    while(relocation->dwPageRVA > 0){
+    while(relocation->VirtualAddress > 0){
         //n_relocation = dwBlockSize - 8) //2
-        DWORD dwNRelocs = (relocation->dwBlockSize - (sizeof(DWORD) * 2) )/ (sizeof(WORD));
-        UINT_PTR lpPage = (UINT_PTR) (baseAddress + relocation->dwPageRVA);
-        printf("[+] There are %d relocations to perform\n", dwNRelocs);
-        for(DWORD i =0; i < dwNRelocs; i++){
-            WORD wBlock = relocation->wRelocation[i];
-            DWORD dwRelocType = wBlock >> 12;
-            INT intOffset = wBlock & 0xfff;
-            printf("[-] perfomring Relocation: %lu, %d\n",dwRelocType, intOffset );
-            ULONGLONG *lpRelocVA = NULL;
-            switch( dwRelocType){
+        DWORD numRelocs = (relocation->SizeOfBlock - (sizeof(DWORD) * 2) )/ (sizeof(WORD));
+        UINT_PTR page = (UINT_PTR) (baseAddress + relocation->VirtualAddress);
+        printf("[+] There are %d relocations to perform\n", numRelocs);
+        for(DWORD i = 0; i < numRelocs; i++){
+            WORD block = relocation->relocation[i];
+            DWORD type = block >> 12;
+            DWORD offset = block & 0xfff;
+            printf("[-] Performation Relocation: %lu, %d\n", type, offset);
+            ULONGLONG *relocVirtualAddress = NULL;
+            switch( type){
                 case IMAGE_REL_BASED_ABSOLUTE:
                     printf("[-] IMAGE_REL_BASED_ABSOLUTE -> nothing to be done!\n");
                     break;
                 case  IMAGE_REL_BASED_DIR64:
-                    lpRelocVA = (ULONGLONG*) (lpPage + intOffset );
-                    *lpRelocVA =  *lpRelocVA  + (ptrdiff_t)(baseAddress - prefImageBase);
+                    relocVirtualAddress = (ULONGLONG*) (page + offset );
+                    *relocVirtualAddress =  *relocVirtualAddress  + (ptrdiff_t)(baseAddress - prefImageBase);
                     break;
                 default:
-                    printf("[!] Unrecongized relocation type! %lu\n", dwRelocType);
+                    printf("[!] Unrecongized relocation type! %lu\n", type);
                     break;
             }
         }
-        relocation = (RelocationBlock*) ( (UINT_PTR)relocation +  relocation->dwBlockSize);
+        relocation = (PIMAGE_RELOCATION_BLOCK) ((UINT_PTR)relocation +  relocation->SizeOfBlock);
     }
   }
   printf("[+] Finished base relocations\n");
