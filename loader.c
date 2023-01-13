@@ -1,7 +1,6 @@
 //making a custom PE loader, for this one, I'm going to try to load calc.exe
 #include <windows.h>
 #include <stdio.h>
-#include <iostream>
 
 //function to execute entrypoint
 typedef void EntryPoint(void);
