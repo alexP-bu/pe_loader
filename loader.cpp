@@ -1,9 +1,16 @@
 //making a custom PE loader, for this one, I'm going to try to load calc.exe
 #include <windows.h>
 #include <stdio.h>
+#include <iostream>
 
 //function to execute entrypoint
 typedef void EntryPoint(void);
+
+typedef struct RelocationBlock {
+    DWORD dwPageRVA;
+    DWORD dwBlockSize;
+    WORD wRelocation[];
+};
 
 //function to read file bytes
 BYTE* getFileBytes(char* path){
@@ -61,7 +68,7 @@ int main(int argc, char *argv[]){
   IMAGE_OPTIONAL_HEADER optionalHeader = ntHeader->OptionalHeader;
   //get information needed for loading
   DWORD entryPoint = optionalHeader.AddressOfEntryPoint;
-  DWORD prefImageBase = optionalHeader.ImageBase;
+  UINT_PTR prefImageBase = optionalHeader.ImageBase;
   DWORD headerSize = optionalHeader.SizeOfHeaders;
   DWORD imageSize = optionalHeader.SizeOfImage;
   DWORD numSections = fileHeader.NumberOfSections;
@@ -72,12 +79,15 @@ int main(int argc, char *argv[]){
     MEM_RESERVE | MEM_COMMIT,
     PAGE_EXECUTE_READWRITE
   ); 
+  if(baseAddress == NULL){
+    printf("[!]Failed to allocate memory!");
+  }
   //copy headers into the memory
   memcpy(baseAddress, fileBytes, headerSize);
   //copy sections into the memory
   for(DWORD i = 0; i < numSections; i++){
-    void* destination = (void*) (sections[i].VirtualAddress + (UINT_PTR)baseAddress);
-    void* source = (void*) (sections[i].PointerToRawData + fileBytes);
+    void* destination = (void*) (sections[i].VirtualAddress + baseAddress);
+    void* source      = (void*) (sections[i].PointerToRawData + fileBytes);
     printf("[-] Copying section %s with size %d\n", sections[i].Name, sections[i].SizeOfRawData);
     if(sections[i].SizeOfRawData == 0){
       memset(destination, 0, sections[i].Misc.VirtualSize);
@@ -87,22 +97,17 @@ int main(int argc, char *argv[]){
   }
   printf("[+] Finished memory mapping PE headers and sections successfully...\n");
   //load dependencies: pe -> for dll in dlls -> for function in dlls -> get virtual address and patch
-  PIMAGE_IMPORT_DESCRIPTOR imageDescriptor = (PIMAGE_IMPORT_DESCRIPTOR)((UINT_PTR)baseAddress + optionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress);
-  HMODULE hLibrary = NULL;
-  PIMAGE_THUNK_DATA lookupTable = NULL;
-  PIMAGE_THUNK_DATA addrTable = NULL;
+  PIMAGE_IMPORT_DESCRIPTOR imageDescriptor = (PIMAGE_IMPORT_DESCRIPTOR)(baseAddress + optionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress);
   int i = 0;
   while(imageDescriptor[i].FirstThunk != 0){
-    //load dll
     char* dllName = (char*) (imageDescriptor[i].Name + baseAddress);
-    if((hLibrary = LoadLibraryA(dllName)) == NULL){
-      printf("[!] ERROR loading DLL: %s\n", dllName);
-    }else{
-      printf("[-] Loaded DLL: %s\n", dllName);
+    HMODULE hLibrary = LoadLibraryA(dllName);
+    if(hLibrary == NULL){
+      printf("[!] ERROR loading DLL");
     }
     //load functions in dlls
-    lookupTable = (PIMAGE_THUNK_DATA) (baseAddress + imageDescriptor[i].OriginalFirstThunk);
-    addrTable = (PIMAGE_THUNK_DATA) (baseAddress + imageDescriptor[i].FirstThunk);
+    PIMAGE_THUNK_DATA lookupTable = (PIMAGE_THUNK_DATA) (baseAddress + imageDescriptor[i].OriginalFirstThunk);
+    PIMAGE_THUNK_DATA addrTable = (PIMAGE_THUNK_DATA) (baseAddress + imageDescriptor[i].FirstThunk);
     int j = 0;
     while(lookupTable[j].u1.AddressOfData != 0){
       FARPROC function = NULL;
@@ -113,7 +118,7 @@ int main(int argc, char *argv[]){
         function = GetProcAddress(hLibrary, functionName);
         printf("[-] Loaded function: %s\n", functionName);
       }else{
-        function = GetProcAddress(hLibrary, (LPSTR) lookupTable);
+        function = GetProcAddress(hLibrary, (LPSTR) addr);
       }
       if(function == NULL){
         printf("[!] FAILED TO LOAD FUNCTION: %d\n", GetLastError());
@@ -125,47 +130,45 @@ int main(int argc, char *argv[]){
     i++;
   }
   printf("[+] Finished loading dependencies sucessfully!\n");
-  //base relocations (TODO)
-  if(baseAddress - prefImageBase != 0){
-    PIMAGE_BASE_RELOCATION relocation = (PIMAGE_BASE_RELOCATION)(baseAddress + optionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].VirtualAddress);
-    while(relocation->VirtualAddress > 0){
-      DWORD nRelocs = relocation->SizeOfBlock - (sizeof(DWORD) * 2) / sizeof(WORD);
-      PWORD pages = (PWORD) (baseAddress + relocation->VirtualAddress);
-      for(DWORD i = 0; i < nRelocs; i++){
-        WORD relocType = pages[i] >> 12;
-        WORD relocOffset = pages[i] & 0xFFF;
-        PDWORD relocAddress = (PDWORD)(baseAddress + relocOffset + relocation->VirtualAddress);
-        printf("[-] Performing relocation with type: %d\n", relocType);
-        PULONGLONG relocVA = NULL;
-        switch(relocType){
-          case IMAGE_REL_BASED_ABSOLUTE:
-            break;
-          case IMAGE_REL_BASED_HIGHLOW:
-            relocAddress += (DWORD) baseAddress;
-            break;
-          case IMAGE_REL_BASED_DIR64: //TODO FIX?
-            relocVA = (PULONGLONG) (pages + relocOffset);
-            relocVA = *relocVA + (baseAddress - prefImageBase);
-            break; 
-          case IMAGE_REL_BASED_HIGHADJ:
-            break; 
-          default:
-            printf("Unsupported relocation type: %d\n", relocType);
+  //base relocations 
+  if (baseAddress - prefImageBase != 0){
+    struct RelocationBlock* relocation = (RelocationBlock*)(baseAddress + optionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].VirtualAddress);
+    while(relocation->dwPageRVA > 0){
+        //n_relocation = dwBlockSize - 8) //2
+        DWORD dwNRelocs = (relocation->dwBlockSize - (sizeof(DWORD) * 2) )/ (sizeof(WORD));
+        UINT_PTR lpPage = (UINT_PTR) (baseAddress + relocation->dwPageRVA);
+        printf("[+] There are %d relocations to perform\n", dwNRelocs);
+        for(DWORD i =0; i < dwNRelocs; i++){
+            WORD wBlock = relocation->wRelocation[i];
+            DWORD dwRelocType = wBlock >> 12;
+            INT intOffset = wBlock & 0xfff;
+            printf("[-] perfomring Relocation: %lu, %d\n",dwRelocType, intOffset );
+            ULONGLONG *lpRelocVA = NULL;
+            switch( dwRelocType){
+                case IMAGE_REL_BASED_ABSOLUTE:
+                    printf("[-] IMAGE_REL_BASED_ABSOLUTE -> nothing to be done!\n");
+                    break;
+                case  IMAGE_REL_BASED_DIR64:
+                    lpRelocVA = (ULONGLONG*) (lpPage + intOffset );
+                    *lpRelocVA =  *lpRelocVA  + (ptrdiff_t)(baseAddress - prefImageBase);
+                    break;
+                default:
+                    printf("[!] Unrecongized relocation type! %lu\n", dwRelocType);
+                    break;
+            }
         }
-        //get next reloc block
-        relocation = (PIMAGE_BASE_RELOCATION) (relocation + relocation->SizeOfBlock);
-      }
+        relocation = (RelocationBlock*) ( (UINT_PTR)relocation +  relocation->dwBlockSize);
     }
   }
   printf("[+] Finished base relocations\n");
   //TLS (thread local storage) callbacks
-  if(optionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_TLS].Size != 0){
-    PIMAGE_TLS_DIRECTORY tls = (PIMAGE_TLS_DIRECTORY)(baseAddress + optionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_TLS].VirtualAddress);
+  if(optionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_TLS].Size){
+    PIMAGE_TLS_DIRECTORY tls = (PIMAGE_TLS_DIRECTORY)((UINT_PTR)baseAddress + ntHeader->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_TLS].VirtualAddress);
     PIMAGE_TLS_CALLBACK *tlsCallback = (PIMAGE_TLS_CALLBACK *) tls->AddressOfCallBacks;
-    while(tlsCallback){
-      printf("[-] TLS callback found: %s", tlsCallback);
-      (*tlsCallback)((LPVOID)baseAddress, DLL_PROCESS_ATTACH, NULL);
-      tlsCallback++;
+    while(*tlsCallback){
+        printf("[+] Found TLS callback at %p\n", (void*) tlsCallback);
+        (*tlsCallback)((LPVOID) baseAddress, DLL_PROCESS_ATTACH, NULL);
+        tlsCallback++;
     }
   }
   printf("[+] Finished handling TLS callbacks...");
