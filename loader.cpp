@@ -10,7 +10,7 @@ typedef struct RelocationBlock {
     DWORD dwPageRVA;
     DWORD dwBlockSize;
     WORD wRelocation[];
-};
+} RelocationBlock, *PIMAGE_RELOCATION_BLOCK;
 
 //function to read file bytes
 BYTE* getFileBytes(char* path){
